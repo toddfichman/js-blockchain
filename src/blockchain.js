@@ -1,11 +1,45 @@
 const SHA256 = require("crypto-js/sha256");
 
+const EC = require('elliptic').ec;
+// Create and initialize EC context
+// (better do it once and reuse it)
+const ec = new EC('secp256k1');
+
 
 class Transaction {
   constructor(fromAddress, toAddress, amount) {
     this.fromAddress = fromAddress;
     this.toAddress = toAddress;
     this.amount = amount;
+    this.timestamp = Date.now();
+  }
+
+  // this hash will sign w/ private key
+  calculateHash() {
+    return SHA256(this.fromAddress + this.toAddress + this.amount + this.timestamp).toString()
+  }
+
+  // signingKey is the key obj from elliptic 
+  // that has getPublic and getPriavte methods
+  signTransaction(signingKey) {
+    if (signingKey.getPublic('hex') !== this.fromAddress) {
+      throw new Error('You cannot sign transactions for other wallets')
+    }
+
+    const hashTransaction = this.calculateHash();
+    const signature = signingKey.sign(hashTransaction, 'base64');
+    this.signature = signature.toDER('hex')
+  }
+
+  isValid() {
+    if (this.fromAddress === null) return true;
+
+    if(!this.signature || this.signature.length === 0) {
+      throw new Error('No signature in this transaction')
+    }
+
+    const publicKey = ec.keyFromPublic(this.fromAddress, 'hex')
+    return publicKey.verify(this.calculateHash(), this.signature)
   }
 }
 
@@ -43,6 +77,16 @@ class Block {
 
     console.log("Block mined: " + this.hash);
   }
+
+  hasValidTransaction() {
+    for(const transaction of this.transactions) {
+      if (!transaction.isValid()) {
+        return false
+      }
+    }
+    return true;
+  }
+   
 }
 
 class Blockchain {
@@ -62,20 +106,27 @@ class Blockchain {
   }
 
   minePendingTransaction(miningRewardAddress) {
-    let block = new Block(Date.now(), this.pendingTransactions);
-    block.mineBlock(this.difficulty)
+    const rewardTransaction = new Transaction(null, miningRewardAddress, this.miningReward);
+    this.pendingTransactions.push(rewardTransaction);
 
-    console.log('Block successfully mined')
+    let block = new Block(Date.now(), this.pendingTransactions, this.getLatestBlock().hash);
+    block.mineBlock(this.difficulty);
+
+    console.log('Block successfully mined!');
     this.chain.push(block);
-    
-    // resetting pendingTransactions and 
-    // seding reward once this block has been mined
-    this.pendingTransactions = [
-      new Transaction(null, miningRewardAddress, this.miningReward)
-    ];
+
+    this.pendingTransactions = [];
   }
 
-  createTransaction(transaction) {
+  addTransaction(transaction) {
+    if(!transaction.fromAddress || !transaction.toAddress) {
+      throw new Error('Transaction must have a to and from address')
+    }
+
+    if (!transaction.isValid()) {
+      throw new Error('Cannot add invalid transaction to the chain')
+    }
+
     this.pendingTransactions.push(transaction)
   }
 
@@ -101,6 +152,10 @@ class Blockchain {
       const currentBlock = this.chain[i];
       const previousBlock = this.chain[i - 1];
 
+      if(!currentBlock.hasValidTransaction()) {
+        return false;
+      }
+
       if (currentBlock.hash !== currentBlock.calculateHash()) {
         console.log("Invalid Chain");
         return false;
@@ -116,25 +171,5 @@ class Blockchain {
   }
 }
 
-let fakeCoin = new Blockchain();
-fakeCoin.createTransaction(new Transaction('address1', 'address2', 20))
-fakeCoin.createTransaction(new Transaction('address2', 'address1', 50))
-
-console.log('\n Starting the miner')
-fakeCoin.minePendingTransaction('address3')
-fakeCoin.minePendingTransaction('address3')
-
-console.log('\n Balance of address3 is ', fakeCoin.getBalanceOfAddress('address3'))
-
-// console.log('Mining block 1...')
-// fakeCoin.addBlock(new Block(1, "8/9/2019", { amount: 10 }));
-
-// console.log('Mining block 2...')
-// fakeCoin.addBlock(new Block(2, "8/10/2019", { amount: 15 }));
-
-// fakeCoin.isChainValid();
-// fakeCoin.chain[1].transactions = { amount: 100 };
-// fakeCoin.chain[1].hash = fakeCoin.chain[1].calculateHash();
-// fakeCoin.isChainValid();
-
-// console.log(JSON.stringify(fakeCoin, null, 4));
+module.exports.Blockchain = Blockchain;
+module.exports.Transaction = Transaction;
